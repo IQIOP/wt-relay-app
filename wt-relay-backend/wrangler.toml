@@ -1,0 +1,9 @@
+﻿name = "wt-relay-backend"
+main = "src/index.js"
+compatibility_date = "2024-10-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "wt-relay-db"
+database_id = "${D1_DATABASE_ID}"
+migrations_dir = "migrations"

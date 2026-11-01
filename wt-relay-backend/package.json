@@ -1,0 +1,13 @@
+﻿{
+  "name": "wt-relay-backend",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "migrate:local": "wrangler d1 migrations apply wt-relay-db --local",
+    "migrate:remote": "wrangler d1 migrations apply wt-relay-db --remote"
+  },
+  "devDependencies": {
+    "wrangler": "^3.78.0"
+  }
+}
