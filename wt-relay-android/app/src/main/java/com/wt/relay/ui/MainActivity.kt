@@ -1,7 +1,6 @@
 ﻿package com.wt.relay.ui
 
 import android.content.Intent
-import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import androidx.activity.ComponentActivity
@@ -26,10 +25,15 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.wt.relay.core.SecureStorage
 import com.wt.relay.data.local.AppDatabase
-import com.wt.relay.data.remote.RegisterDeviceRequest
-import com.wt.relay.data.remote.WtRelayApiService
 import com.wt.relay.services.RelaySyncWorker
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONObject
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -40,11 +44,10 @@ class MainActivity : ComponentActivity() {
         setContent {
             var lang by remember { mutableStateOf(storage.language) }
             val isArabic = lang == "ar"
-            val direction = if (isArabic) LayoutDirection.Rtl else LayoutDirection.Ltr
 
-            CompositionLocalProvider(LocalLayoutDirection provides direction) {
+            CompositionLocalProvider(LocalLayoutDirection provides if (isArabic) LayoutDirection.Rtl else LayoutDirection.Ltr) {
                 MaterialTheme(colorScheme = darkColorScheme()) {
-                    LiquidGlassScreen(
+                    UserRelayScreen(
                         storage = storage,
                         dao = dao,
                         isArabic = isArabic,
@@ -60,7 +63,7 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun LiquidGlassScreen(
+fun UserRelayScreen(
     storage: SecureStorage,
     dao: com.wt.relay.data.local.NotificationDao,
     isArabic: Boolean,
@@ -70,130 +73,206 @@ fun LiquidGlassScreen(
     val scope = rememberCoroutineScope()
     val events by dao.observeRecentEvents().collectAsState(initial = emptyList())
 
-    var apiUrl by remember { mutableStateOf(storage.baseUrl) }
-    var activationCode by remember { mutableStateOf("") }
-    var statusMsg by remember { mutableStateOf("") }
-    var isRegistered by remember { mutableStateOf(storage.deviceToken != null) }
+    var botTokenInput by remember { mutableStateOf("") }
+    var destinationInput by remember { mutableStateOf("") }
+    var statusFeedback by remember { mutableStateOf("") }
+    var isOperating by remember { mutableStateOf(false) }
 
     val bgGradient = Brush.verticalGradient(
-        colors = listOf(Color(0xFF0A0F1D), Color(0xFF131E36), Color(0xFF080B14))
+        colors = listOf(Color(0xFF0D131F), Color(0xFF131D31), Color(0xFF090D15))
     )
 
     Box(modifier = Modifier.fillMaxSize().background(bgGradient).padding(16.dp)) {
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            // Header
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = if (isArabic) "WT Relay — بوابة الترحيل الآمن" else "WT Relay — Secure Gateway",
+                    text = if (isArabic) "WT Relay — ترحيل الإشعارات" else "WT Relay — User Client",
                     color = Color.White,
-                    fontSize = 20.sp,
+                    fontSize = 18.sp,
                     fontWeight = FontWeight.Bold
                 )
                 OutlinedButton(onClick = onToggleLang) {
-                    Text(if (isArabic) "EN" else "عربي", color = Color(0xFF64B5F6))
+                    Text(if (isArabic) "English" else "عربي", color = Color(0xFF64B5F6))
                 }
             }
 
-            // Glass Card: Device Status & Pairing
+            // Status Card
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(Color.White.copy(alpha = 0.07f), RoundedCornerShape(16.dp))
-                    .border(1.dp, Color.White.copy(alpha = 0.16f), RoundedCornerShape(16.dp))
-                    .padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+                    .background(Color.White.copy(alpha = 0.06f), RoundedCornerShape(14.dp))
+                    .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(14.dp))
+                    .padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 Text(
-                    text = (if (isArabic) "معرف الجهاز: " else "Device ID: ") + storage.deviceId,
-                    color = Color(0xFFB0BEC5),
-                    fontSize = 13.sp
+                    text = "${if (isArabic) "معرف الجهاز: " else "Device ID: "}${storage.deviceId.take(18)}...",
+                    color = Color(0xFF90A4AE),
+                    fontSize = 12.sp
                 )
                 Text(
-                    text = if (isRegistered)
-                        (if (isArabic) "الحالة: مفعل ومتصل" else "Status: Active & Paired")
-                    else
-                        (if (isArabic) "الحالة: بانتظار التفعيل" else "Status: Pending Activation"),
-                    color = if (isRegistered) Color(0xFF81C784) else Color(0xFFFFB74D),
-                    fontWeight = FontWeight.SemiBold
+                    text = "${if (isArabic) "آخر مزامنة: " else "Last Sync: "}${storage.lastSyncTime}",
+                    color = Color(0xFFCFD8DC),
+                    fontSize = 12.sp
                 )
 
-                OutlinedTextField(
-                    value = apiUrl,
-                    onValueChange = { apiUrl = it },
-                    label = { Text(if (isArabic) "رابط خادم Cloudflare Worker" else "Cloudflare Worker URL") },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true
-                )
-
-                if (!isRegistered) {
-                    OutlinedTextField(
-                        value = activationCode,
-                        onValueChange = { activationCode = it },
-                        label = { Text(if (isArabic) "رمز التفعيل" else "Activation Code") },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true
-                    )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                     Button(
                         onClick = {
-                            scope.launch {
-                                try {
-                                    storage.baseUrl = apiUrl.trim()
-                                    val api = WtRelayApiService.create(storage)
-                                    val resp = api.registerDevice(
-                                        RegisterDeviceRequest(
-                                            device_id = storage.deviceId,
-                                            device_name = Build.MODEL ?: "Android Device",
-                                            app_version = "1.0.0",
-                                            activation_code = activationCode.trim()
-                                        )
-                                    )
-                                    if (resp.isSuccessful && resp.body()?.device_token != null) {
-                                        storage.deviceToken = resp.body()!!.device_token
-                                        isRegistered = true
-                                        statusMsg = if (isArabic) "تم تفعيل الجهاز بنجاح" else "Device registered successfully"
-                                        RelaySyncWorker.enqueueImmediateSync(context)
-                                    } else {
-                                        statusMsg = if (isArabic) "فشل التفعيل: تحقق من الرمز" else "Activation failed: Check code"
-                                    }
-                                } catch (e: Exception) {
-                                    statusMsg = e.localizedMessage ?: "Network Error"
-                                }
-                            }
+                            RelaySyncWorker.enqueueImmediateSync(context)
+                            statusFeedback = if (isArabic) "تم تشغيل المزامنة الفورية..." else "Sync triggered..."
                         },
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier.weight(1f)
                     ) {
-                        Text(if (isArabic) "تفعيل وربط الجهاز" else "Activate & Pair Device")
+                        Text(if (isArabic) "مزامنة الآن" else "Sync Now")
                     }
-                }
 
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(
                         onClick = { context.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) },
                         modifier = Modifier.weight(1f)
                     ) {
-                        Text(if (isArabic) "صلاحية الإشعارات" else "Listener Access")
+                        Text(if (isArabic) "صلاحية الإشعارات" else "Permissions")
                     }
-                    OutlinedButton(
-                        onClick = { RelaySyncWorker.enqueueImmediateSync(context) },
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Text(if (isArabic) "مزامنة الآن" else "Sync Queue")
-                    }
-                }
-
-                if (statusMsg.isNotEmpty()) {
-                    Text(statusMsg, color = Color(0xFF4FC3F7), fontSize = 13.sp)
                 }
             }
 
-            // Glass Card: Offline Queue & Delivery Feed
+            // Telegram Setup Card
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Color.White.copy(alpha = 0.06f), RoundedCornerShape(14.dp))
+                    .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(14.dp))
+                    .padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = if (isArabic) "إعدادات وجهة Telegram" else "Telegram Destination Setup",
+                    color = Color.White,
+                    fontWeight = FontWeight.SemiBold
+                )
+
+                OutlinedTextField(
+                    value = botTokenInput,
+                    onValueChange = { botTokenInput = it },
+                    label = { Text(if (isArabic) "Telegram Bot Token" else "Bot Token") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                OutlinedTextField(
+                    value = destinationInput,
+                    onValueChange = { destinationInput = it },
+                    label = { Text(if (isArabic) "معرف الوجهة (Chat / Channel / Group ID)" else "Destination Chat/Channel ID") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = {
+                            isOperating = true
+                            scope.launch(Dispatchers.IO) {
+                                try {
+                                    val client = OkHttpClient()
+                                    val json = JSONObject().apply {
+                                        put("bot_token", botTokenInput.trim())
+                                        put("chat_id", destinationInput.trim())
+                                    }
+                                    val req = Request.Builder()
+                                        .url(storage.baseUrl.trimEnd('/') + "/api/user/test-telegram")
+                                        .addHeader("X-Device-Token", storage.deviceToken ?: "")
+                                        .post(json.toString().toRequestBody("application/json".toMediaType()))
+                                        .build()
+
+                                    val resp = client.newCall(req).execute()
+                                    val respBody = resp.body?.string() ?: ""
+                                    withContext(Dispatchers.Main) {
+                                        if (resp.isSuccessful) {
+                                            statusFeedback = if (isArabic) "✓ نجح الاتصال وتم إرسال رسالة الاختبار بنجاح!" else "✓ Telegram Connected Successfully!"
+                                        } else {
+                                            val err = JSONObject(respBody).optString("error", "Failed")
+                                            statusFeedback = "✕ $err"
+                                        }
+                                        isOperating = false
+                                    }
+                                } catch (e: Exception) {
+                                    withContext(Dispatchers.Main) {
+                                        statusFeedback = "✕ Error: ${e.localizedMessage}"
+                                        isOperating = false
+                                    }
+                                }
+                            }
+                        },
+                        enabled = !isOperating && storage.deviceToken != null,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text(if (isArabic) "اختبار الاتصال" else "Test Telegram")
+                    }
+
+                    OutlinedButton(
+                        onClick = {
+                            isOperating = true
+                            scope.launch(Dispatchers.IO) {
+                                try {
+                                    val client = OkHttpClient()
+                                    val json = JSONObject().apply {
+                                        put("bot_token", botTokenInput.trim())
+                                        put("chat_id", destinationInput.trim())
+                                    }
+                                    val req = Request.Builder()
+                                        .url(storage.baseUrl.trimEnd('/') + "/api/user/update-telegram")
+                                        .addHeader("X-Device-Token", storage.deviceToken ?: "")
+                                        .post(json.toString().toRequestBody("application/json".toMediaType()))
+                                        .build()
+
+                                    val resp = client.newCall(req).execute()
+                                    val respStr = resp.body?.string() ?: ""
+                                    withContext(Dispatchers.Main) {
+                                        if (resp.isSuccessful) {
+                                            val jsonRes = JSONObject(respStr)
+                                            botTokenInput = jsonRes.optString("masked_token", "")
+                                            statusFeedback = if (isArabic) "✓ تم حفظ الإعدادات وتأكيد الاتصال." else "✓ Settings Saved & Verified."
+                                        } else {
+                                            val err = JSONObject(respStr).optString("error", "Error")
+                                            statusFeedback = "✕ $err"
+                                        }
+                                        isOperating = false
+                                    }
+                                } catch (e: Exception) {
+                                    withContext(Dispatchers.Main) {
+                                        statusFeedback = "✕ Error: ${e.localizedMessage}"
+                                        isOperating = false
+                                    }
+                                }
+                            }
+                        },
+                        enabled = !isOperating && storage.deviceToken != null,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text(if (isArabic) "حفظ الوجهة" else "Save")
+                    }
+                }
+
+                if (statusFeedback.isNotEmpty()) {
+                    Text(
+                        text = statusFeedback,
+                        color = if (statusFeedback.startsWith("✓")) Color(0xFF81C784) else Color(0xFFEF5350),
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+            }
+
+            // Notification Delivery Queue Feed
             Text(
-                text = if (isArabic) "سجل طابور الإشعارات (${events.size})" else "Notification Queue (${events.size})",
+                text = "${if (isArabic) "حالة إرسال الإشعارات" else "Relay Pipeline Events"} (${events.size})",
                 color = Color.White,
-                fontWeight = FontWeight.Bold
+                fontWeight = FontWeight.SemiBold
             )
 
             LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -201,22 +280,27 @@ fun LiquidGlassScreen(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(12.dp))
-                            .border(1.dp, Color.White.copy(alpha = 0.1f), RoundedCornerShape(12.dp))
-                            .padding(12.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween
+                            .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(10.dp))
+                            .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(10.dp))
+                            .padding(10.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
-                            Text(ev.senderTitle, color = Color.White, fontWeight = FontWeight.SemiBold)
-                            Text(ev.messageText, color = Color(0xFFB0BEC5), fontSize = 13.sp, maxLines = 2)
+                            Text(ev.senderTitle, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                            Text(ev.messageText, color = Color(0xFFB0BEC5), fontSize = 12.sp, maxLines = 1)
                         }
+
+                        val (statusBadge, statusColor) = when (ev.status) {
+                            "DELIVERED" -> Pair("✓ Sent", Color(0xFF81C784))
+                            "PENDING" -> Pair("⏳ Pending", Color(0xFFFFD54F))
+                            "RETRYING" -> Pair("↻ Retrying", Color(0xFF64B5F6))
+                            else -> Pair("✕ Failed", Color(0xFFE57373))
+                        }
+
                         Text(
-                            text = ev.status,
-                            color = when (ev.status) {
-                                "DELIVERED" -> Color(0xFF81C784)
-                                "PENDING" -> Color(0xFFFFD54F)
-                                else -> Color(0xFFE57373)
-                            },
+                            text = statusBadge,
+                            color = statusColor,
                             fontWeight = FontWeight.Bold,
                             fontSize = 12.sp
                         )
