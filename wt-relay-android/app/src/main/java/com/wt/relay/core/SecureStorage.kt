@@ -19,7 +19,7 @@ class SecureStorage(context: Context) {
     )
 
     var baseUrl: String
-        get() = prefs.getString("base_url", "https://wt-relay-backend.workers.dev/") ?: "https://wt-relay-backend.workers.dev/"
+        get() = prefs.getString("base_url", "https://wt-relay-backend.7i8l501n4h.workers.dev/") ?: "https://wt-relay-backend.7i8l501n4h.workers.dev/"
         set(value) = prefs.edit().putString("base_url", if (value.endsWith("/")) value else "$value/").apply()
 
     val deviceId: String

@@ -5,5 +5,5 @@ compatibility_date = "2024-10-01"
 [[d1_databases]]
 binding = "DB"
 database_name = "wt-relay-db"
-database_id = "${D1_DATABASE_ID}"
+database_id = "07d33e24-1607-4397-b6c1-2bd74147508d"
 migrations_dir = "migrations"
